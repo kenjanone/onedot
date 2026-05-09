@@ -31,15 +31,15 @@ log = logging.getLogger(__name__)
 # /dc/train route and the startup _auto_train thread write to the same object.
 
 def _run_dc_training():
-    global _upcoming_cache
     _dc_training_state.clear()
     _dc_training_state.update({"status": "running", "started_at": time.time()})
     try:
         result = train_dc_model()
         _dc_training_state.clear()
         _dc_training_state.update({"status": "done", "result": result})
-        # Bust the upcoming cache so Free Picks reflects the new model immediately
-        _upcoming_cache = {"data": None, "expires_at": 0.0}
+        # Bust cache so Free Picks reflects the new model immediately
+        from ml.cache import _cache
+        _cache.invalidate("upcoming:")
         if result.get("trained"):
             log.info("DC retrain complete: %d matches", result.get("n_matches", 0))
         else:
@@ -130,9 +130,7 @@ def _log_markets_prediction_bg(
         log.exception("prediction_markets_log insert failed")
 
 
-# ─── 15-min cache for /upcoming (makes Free Picks near-instant after first hit) 
-_upcoming_cache: dict = {"data": None, "expires_at": 0.0}
-_UPCOMING_TTL = 15 * 60   # seconds
+from ml.cache import _cache
 
 
 # ─── GET /api/markets/upcoming ────────────────────────────────────────────────
@@ -177,17 +175,11 @@ def upcoming_dc_predictions(
 
     from ml.consensus_engine import upcoming_consensus_fast
 
-    # Return from cache if still fresh
-    cache_key = (league_id, limit)
-    now = time.time()
-    if (
-        _upcoming_cache.get("data") is not None
-        and _upcoming_cache.get("expires_at", 0) > now
-        and _upcoming_cache.get("key") == cache_key
-    ):
-        log.debug("Returning /upcoming from cache (%.0fs remaining)",
-                  _upcoming_cache["expires_at"] - now)
-        return _upcoming_cache["data"]
+    # —— Cache check —————————————————————————————————————————
+    cached, hit = _cache.get_upcoming(league_id, limit)
+    if hit:
+        log.debug("GET /upcoming — cache hit")
+        return cached
 
     # ── Bulk Generate Consensus Pipeline ──
     raw_results = upcoming_consensus_fast(league_id, limit)
@@ -261,38 +253,44 @@ def upcoming_dc_predictions(
             }
             results.append(result_entry)
             
-            dc_out  = engines.get("dc", {}).get("predicted_outcome")
-            ml_out  = engines.get("ml", {}).get("predicted_outcome")
-            leg_out = engines.get("legacy", {}).get("predicted_outcome")
+            dc_out  = engines.get("dc",         {}).get("predicted_outcome")
+            ml_out  = engines.get("ml",         {}).get("predicted_outcome")
+            leg_out = engines.get("legacy",     {}).get("predicted_outcome")
             enr_out = engines.get("enrichment", {}).get("predicted_outcome")
-            
-            # Auto-log prediction_log — background thread
-            threading.Thread(
-                target=_log_db,
-                args=(result_entry, int(fx_id), dc_out, ml_out, enr_out, leg_out, f"{pred_h}-{pred_a}"),
-                daemon=True,
-            ).start()
 
-            # Auto-log prediction_markets_log — background thread
-            threading.Thread(
-                target=_log_markets_prediction_bg,
-                args=(
-                    int(fx_id),
-                    fx["home_team"], fx["away_team"],
-                    fx.get("league", ""), pred["match_date"],
-                    markets,               # raw markets dict from consensus engine
-                    outcome, round(lead, 4),
-                    xg_h, xg_a,
-                ),
-                daemon=True,
-            ).start()
+            # Route prediction + market logging through the job queue log pool.
+            # This replaces spawning 2 daemon threads per fixture (60 threads
+            # for limit=30). The pool is capped at max_workers=4.
+            from ml.job_queue import get_queue, JobType
+            _q = get_queue()
+            _q.enqueue(JobType.LOG_PREDICTION, {
+                "result_entry": result_entry,
+                "fixture_id":   int(fx_id),
+                "dc_out":       dc_out,
+                "ml_out":       ml_out,
+                "enr_out":      enr_out,
+                "leg_out":      leg_out,
+                "score":        f"{pred_h}-{pred_a}",
+            })
+            _q.enqueue(JobType.LOG_MARKETS, {
+                "match_id":     int(fx_id),
+                "home_team":    fx["home_team"],
+                "away_team":    fx["away_team"],
+                "league":       fx.get("league", ""),
+                "match_date":   pred["match_date"],
+                "markets":      markets,
+                "outcome":      outcome,
+                "confidence":   round(lead, 4),
+                "xg_h":         xg_h,
+                "xg_a":         xg_a,
+            })
         except Exception as exc:
             log.debug("Formatting skip fixture %s vs %s: %s", pred.get("match", {}).get("home_team"), pred.get("match", {}).get("away_team"), exc)
             continue
 
     response = {"count": len(results), "predictions": results, "engine": "consensus"}
-    _upcoming_cache = {"data": response, "expires_at": time.time() + _UPCOMING_TTL, "key": cache_key}
-    log.info("Built /upcoming cache: %d consensus predictions, TTL %ds", len(results), _UPCOMING_TTL)
+    _cache.set_upcoming(league_id, limit, response)
+    log.info("Built /upcoming: %d consensus predictions (cached).", len(results))
     return response
 
 

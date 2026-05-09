@@ -271,6 +271,21 @@ class DataCache:
             if len(self.matches_by_team[m["away_team_id"]]) < 50:
                 self.matches_by_team[m["away_team_id"]].append(m)
 
+        # H2H index — O(1) lookup by team pair instead of O(n) linear scan.
+        # Key: canonical (min_id, max_id) tuple so order is irrelevant.
+        #
+        # Without this index, _compute_h2h() would scan all_matches (38k+
+        # rows) for EVERY fixture. With 30 upcoming fixtures that is
+        # 30 × O(38k) = ~1.1M comparisons per /upcoming request.
+        # With this index: 30 × O(1) dict lookup + O(k) where k ≤ 20 H2H rows.
+        #
+        # Space: O(n) references — Python lists share the same dict objects
+        # already in self.all_matches; no copies are made.
+        self.h2h_index: Dict[Tuple, List] = defaultdict(list)
+        for m in self.all_matches:
+            h, a = m["home_team_id"], m["away_team_id"]
+            self.h2h_index[(min(h, a), max(h, a))].append(m)
+
         # 5. Seasons ──────────────────────────────────────────────────────────
         cur.execute("SELECT id, name FROM seasons")
         seasons = [dict(r) for r in cur.fetchall()]
@@ -459,11 +474,9 @@ def _compute_form(cache: DataCache, team_id: int, venue: Optional[str] = None,
 # ─── H2H (in-memory) ──────────────────────────────────────────────────────────
 
 def _compute_h2h(cache: DataCache, home_team_id: int, away_team_id: int, n: int = 10, before_date=None) -> dict:
-    rows = [
-        m for m in cache.all_matches
-        if (m["home_team_id"] == home_team_id and m["away_team_id"] == away_team_id)
-        or (m["home_team_id"] == away_team_id and m["away_team_id"] == home_team_id)
-    ]
+    # O(1) dict lookup via canonical (min, max) key — replaces O(38k) linear scan.
+    key  = (min(home_team_id, away_team_id), max(home_team_id, away_team_id))
+    rows = list(cache.h2h_index.get(key, []))  # shallow copy — safe to slice
     rows = _filter_before(rows, before_date)[:n]
 
     h_wins = d = a_wins = hg_tot = ag_tot = 0
