@@ -21,7 +21,7 @@ from database import get_connection
 from ml.dc_engine  import (predict_dc_match, train_dc_model,
                             dc_status, get_dc_predictor,
                             dc_training_state as _dc_training_state)
-from ml.markets    import MarketPricer, ValueDetector, ArbitrageScanner
+
 
 router = APIRouter()
 log = logging.getLogger(__name__)
