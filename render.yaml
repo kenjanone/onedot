@@ -1,0 +1,36 @@
+# render.yaml — Render deployment configuration for PlusOne backend
+# https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: plusone-backend
+    runtime: python
+    region: oregon          # Change to: frankfurt / singapore / ohio as needed
+    plan: starter           # starter = 512MB RAM | standard = 2GB RAM (recommended for ML)
+
+    # Build phase — install all Python dependencies
+    buildCommand: pip install -r requirements.txt
+
+    # Start command — matches the Procfile but cleaner
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
+
+    # Health check — Render will restart the container if this fails
+    healthCheckPath: /api/health
+
+    # Auto-deploy on every push to main branch
+    autoDeploy: true
+
+    # Environment variables
+    # Set DATABASE_URL in the Render dashboard under Environment
+    # DO NOT put secrets in this file — use Render's dashboard env vars
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: PORT
+        value: 8000
+      - key: DATABASE_URL
+        sync: false          # Set manually in Render dashboard (your Supabase URL)
+      - key: SECRET_KEY
+        sync: false          # Set manually in Render dashboard
+      - key: ALLOWED_ORIGINS
+        sync: false          # Set manually — your frontend URL(s)
