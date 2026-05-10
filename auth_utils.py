@@ -31,14 +31,19 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 _pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def _truncate(plain: str) -> str:
+    """Truncate to 72 bytes — bcrypt's hard limit."""
+    return plain.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+
+
 def hash_password(plain: str) -> str:
     """Return bcrypt hash of the plain-text password."""
-    return _pwd_context.hash(plain)
+    return _pwd_context.hash(_truncate(plain))
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     """Return True if plain matches the stored bcrypt hash."""
-    return _pwd_context.verify(plain, hashed)
+    return _pwd_context.verify(_truncate(plain), hashed)
 
 
 # ── JWT ───────────────────────────────────────────────────────────────────────
