@@ -14,7 +14,7 @@ def get_venue_stats(
     conn = get_connection()
     cur = conn.cursor()
     query = """
-        SELECT tv.*, t.name AS team, t.logo_url, l.name AS league, s.name AS season
+        SELECT tv.*, t.name AS team, t.logo_url AS logo_url, l.name AS league, s.name AS season
         FROM team_venue_stats tv
         JOIN teams t ON t.id = tv.team_id
         JOIN leagues l ON l.id = tv.league_id

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Predictions API Route
 ======================
 Endpoints:
@@ -26,7 +26,7 @@ from typing import Optional
 from database import get_connection
 import ml.prediction_engine as engine
 from ml.prediction_engine import predict_upcoming_fast
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 
 log = logging.getLogger(__name__)
 router = APIRouter()

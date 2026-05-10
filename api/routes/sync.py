@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 import time
 import threading
@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Any
 from database import get_connection
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 
 _sync_log = logging.getLogger(__name__)
 
@@ -93,155 +93,28 @@ def safe_age_int(val):
 router = APIRouter()
 
 
-from routes.prediction_log import do_evaluate_predictions
+from api.routes.prediction_log import do_evaluate_predictions
 
-_evaluate_lock = threading.Lock()
+# ── Post-sync background pipeline ────────────────────────────────────────────
+# All three tasks (evaluate → recalibrate → retrain → warm cache) are now
+# managed by JobQueue, which handles deduplication (O(1) set lookup) and
+# serialisation (single worker thread) — no per-sync locks needed.
 
-def _auto_evaluate_predictions(conn) -> int:
+def _trigger_post_sync_pipeline():
     """
-    Grade all unevaluated prediction_log rows whose match is now complete.
-    Called automatically after each sync so performance metrics stay current.
-    Returns the number of rows updated.
+    Enqueue all post-sync background jobs in priority order.
+    JobQueue deduplicates: if a job is already pending or running, the
+    enqueue() call is a no-op (returns False) — zero overhead.
     """
-    with _evaluate_lock:
-        try:
-            updated = do_evaluate_predictions(conn)
-            conn.commit()
-            return updated
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error("Auto-evaluate failed: %s", e)
-            try: conn.rollback()
-            except Exception: pass
-            return 0
-_recalibrate_lock = threading.Lock()
+    from ml.job_queue import get_queue, JobType
+    q = get_queue()
+    q.enqueue(JobType.EVALUATE_PREDICTIONS)   # P0: grade completed matches
+    q.enqueue(JobType.RECALIBRATE_ML)          # P1: ML feedback calibration
+    q.enqueue(JobType.RECALIBRATE_DC)          # P1: DC calibration
+    q.enqueue(JobType.RECALIBRATE_MARKETS)     # P1: market calibration
+    q.enqueue(JobType.RETRAIN_ML)              # P2: retrain if gates pass
+    q.enqueue(JobType.WARM_CACHE)              # P3: precompute predictions
 
-def _auto_recalibrate_bg():
-    """
-    Fire-and-forget: refit the ML feedback calibrator from prediction_log.
-    Runs in a background daemon thread so the sync response is not delayed.
-    After calibration, also trigger DC live-calibration from dc_correct data.
-    """
-    if not _recalibrate_lock.acquire(blocking=False):
-        _sync_log.debug("Auto-recalibrate already running. Skipping this trigger.")
-        return
-    try:
-        from ml.feedback_calibrator import recalibrate_with_feedback
-        recalibrate_with_feedback()
-        _sync_log.info("Auto-recalibrate (ML) completed after sync.")
-    except Exception as exc:
-        _sync_log.warning("Auto-recalibrate (ML) failed: %s", exc)
-    try:
-        from ml.dc_engine import get_dc_predictor
-        dc = get_dc_predictor()
-        if dc is not None and dc.fitted:
-            n = dc.fit_calibrator_from_log()
-            if n:
-                _sync_log.info("Auto-recalibrate (DC) completed on %d samples.", n)
-    except Exception as exc:
-        _sync_log.warning("Auto-recalibrate (DC) failed: %s", exc)
-    try:
-        from ml.market_recalibrator import recalibrate_markets_from_log
-        recalibrate_markets_from_log()
-        _sync_log.info("Auto-recalibrate (markets) completed after sync.")
-    except Exception as exc:
-        _sync_log.warning("Auto-recalibrate (markets) failed: %s", exc)
-    finally:
-        _recalibrate_lock.release()
-
-# ── Auto-retrain ─────────────────────────────────────────────────────────────
-# Triggers a full ML ensemble retrain when enough new completed matches have
-# accumulated since the last training run, without ever blocking a sync response.
-
-_retrain_lock = threading.Lock()
-_MIN_NEW_MATCHES_FOR_RETRAIN = 50   # retrain when this many new completed matches
-                                     # have accumulated since the last training run
-_MIN_RETRAIN_INTERVAL_DAYS   = 7    # never retrain more frequently than once per week
-
-def _auto_retrain_bg():
-    """
-    Fire-and-forget: retrain the ML ensemble when enough new completed matches
-    have accumulated since the last training run.
-
-    Gates (both must pass before retraining fires):
-      1. At least _MIN_RETRAIN_INTERVAL_DAYS since last successful train.
-      2. At least _MIN_NEW_MATCHES_FOR_RETRAIN new completed matches in the DB
-         vs n_samples in the current trained model.
-
-    This guarantees the model stays current without running on every sync.
-    """
-    if not _retrain_lock.acquire(blocking=False):
-        _sync_log.debug("Auto-retrain already running. Skipping this trigger.")
-        return
-    try:
-        import datetime
-        from ml.prediction_engine import train_model
-        from ml.prediction_engine import _meta as _engine_meta
-
-        # ── Gate 1: minimum interval since last train ─────────────────────────
-        trained_at_str = _engine_meta.get("trained_at")
-        if trained_at_str:
-            try:
-                trained_at = datetime.datetime.fromisoformat(
-                    trained_at_str.replace("Z", "+00:00")
-                )
-                days_since = (
-                    datetime.datetime.now(datetime.timezone.utc) - trained_at
-                ).days
-                if days_since < _MIN_RETRAIN_INTERVAL_DAYS:
-                    _sync_log.debug(
-                        "Auto-retrain skipped: only %d days since last train (min %d).",
-                        days_since, _MIN_RETRAIN_INTERVAL_DAYS,
-                    )
-                    return
-            except Exception:
-                pass  # if date parse fails, proceed to gate 2
-
-        # ── Gate 2: enough new completed matches since last train ─────────────
-        n_trained = int(_engine_meta.get("n_samples") or 0)
-        try:
-            from database import get_connection as _gc
-            _conn = _gc()
-            _cur  = _conn.cursor()
-            _cur.execute(
-                "SELECT COUNT(*) AS n FROM matches WHERE home_score IS NOT NULL"
-            )
-            _row = _cur.fetchone()
-            _conn.close()
-            n_total = int(_row["n"] or 0) if _row else 0
-        except Exception as exc:
-            _sync_log.warning("Auto-retrain gate-2 check failed: %s", exc)
-            return
-
-        new_matches = n_total - n_trained
-        if new_matches < _MIN_NEW_MATCHES_FOR_RETRAIN:
-            _sync_log.debug(
-                "Auto-retrain skipped: only %d new completed matches since last "
-                "train (need %d).",
-                new_matches, _MIN_NEW_MATCHES_FOR_RETRAIN,
-            )
-            return
-
-        _sync_log.info(
-            "Auto-retrain triggered: %d new completed matches since last train "
-            "(%d total, %d trained on).",
-            new_matches, n_total, n_trained,
-        )
-        result = train_model()
-        if result.get("success"):
-            _sync_log.info(
-                "Auto-retrain completed: %d matches trained, CV accuracy %.1f%%.",
-                result.get("matches_trained", 0),
-                (result.get("cv_accuracy") or 0) * 100,
-            )
-        else:
-            _sync_log.warning(
-                "Auto-retrain completed with error: %s", result.get("error", "unknown")
-            )
-    except Exception as exc:
-        _sync_log.exception("Auto-retrain thread error: %s", exc)
-    finally:
-        _retrain_lock.release()
 
 class TableData(BaseModel):
     headers: List[str] = []
@@ -570,7 +443,7 @@ def get_or_create_team(cur, name, league_id):
     # This ensures both FBref and Football-Data paths produce identical team names.
     # e.g. FBref sends "Nott'ham Forest" → alias → "Nottingham Forest"
     try:
-        from routes.sync_enrichment import TEAM_NAME_ALIASES
+        from api.routes.sync_enrichment import TEAM_NAME_ALIASES
         clean = TEAM_NAME_ALIASES.get(clean.strip().lower(), clean)
     except ImportError:
         try:
@@ -810,18 +683,11 @@ def sync_all(payload: SyncPayload, _admin: dict = Depends(require_admin)):
         conn.commit()
         log_scrape(cur, league_id, season_id, "sync_all", total_rows, 0)
         conn.commit()
-        # Auto-evaluate predictions whose matches just received scores
-        evaluated = _auto_evaluate_predictions(conn)
-        # Auto-recalibrate both ML and DC engines if new grades came in
-        if evaluated > 0:
-            threading.Thread(target=_auto_recalibrate_bg, daemon=True,
-                             name="auto-recalibrate").start()
-        # Auto-retrain the ML ensemble when enough new matches have accumulated.
-        # Internal gates prevent this from firing more than once per week or
-        # before 50+ new completed matches are available.
-        threading.Thread(target=_auto_retrain_bg, daemon=True,
-                         name="auto-retrain").start()
-        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl, "standings_inserted": sd, "home_away_inserted": ha, "logos_updated": logos, "predictions_evaluated": evaluated, "recalibration_triggered": evaluated > 0}
+        # Trigger the full post-sync pipeline via the job queue (single call).
+        # JobQueue handles evaluate → recalibrate → retrain → warm_cache in
+        # priority order with O(1) deduplication — no manual locking needed.
+        _trigger_post_sync_pipeline()
+        return {"success": True, "fixtures_inserted": fx, "stats_inserted": st, "players_inserted": pl, "standings_inserted": sd, "home_away_inserted": ha, "logos_updated": logos}
 
     except Exception as e:
         conn.rollback()
@@ -844,13 +710,8 @@ def sync_fixtures(payload: SyncPayload, _admin: dict = Depends(require_admin)):
         inserted = _insert_fixtures(cur, league_id, season_id, payload.league, rows)
         conn.commit()
         # Auto-evaluate predictions whose matches just received scores
-        evaluated = _auto_evaluate_predictions(conn)
-        if evaluated > 0:
-            threading.Thread(target=_auto_recalibrate_bg, daemon=True,
-                             name="auto-recalibrate").start()
-        threading.Thread(target=_auto_retrain_bg, daemon=True,
-                         name="auto-retrain").start()
-        return {"success": True, "matches_inserted": inserted, "predictions_evaluated": evaluated, "recalibration_triggered": evaluated > 0}
+        _trigger_post_sync_pipeline()
+        return {"success": True, "matches_inserted": inserted}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))

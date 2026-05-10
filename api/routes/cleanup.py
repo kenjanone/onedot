@@ -1,8 +1,8 @@
-"""
+﻿"""
 Cleanup endpoints to purge corrupted data from bad syncs.
 """
 from fastapi import APIRouter, Depends
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 from database import get_connection
 
 router = APIRouter()

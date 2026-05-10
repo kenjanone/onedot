@@ -1,4 +1,4 @@
-"""
+﻿"""
 Betting Markets API Routes
 ===========================
 GET  /api/markets              — Full market sheet for a fixture (needs DC model trained)
@@ -186,7 +186,7 @@ def upcoming_dc_predictions(
     
     results = []
     import threading
-    from routes.predictions import _log_prediction_to_db as _log_db
+    from api.routes.predictions import _log_prediction_to_db as _log_db
 
     for pred in raw_results:
         try:

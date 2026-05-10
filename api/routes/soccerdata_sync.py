@@ -1,4 +1,4 @@
-"""
+﻿"""
 soccerdata_sync.py
 ==================
 Backend-driven data collection using the `soccerdata` Python library.
@@ -40,7 +40,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from database import get_connection
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 
 # ── Reuse insert helpers from sync.py ─────────────────────────────────────────
 # NOTE: _insert_standings and _insert_home_away_stats are intentionally NOT
@@ -48,7 +48,7 @@ from routes.deps import require_admin
 # endpoints — those data types are only produced by the browser extension
 # (via sync.py's detect_table_type dispatch).  Importing them here would be
 # dead code and misleading.
-from routes.sync import (
+from api.routes.sync import (
     _auto_evaluate_predictions,
     _auto_recalibrate_bg,
     _insert_fixtures,
@@ -64,7 +64,7 @@ from routes.sync import (
 # NOTE: CLUBELO_LEAGUE_MAP and TEAM_NAME_ALIASES are intentionally NOT imported
 # here.  They are used inside _get_league() and _get_team() (defined in
 # sync_enrichment.py) and do not need to be re-imported into this module.
-from routes.sync_enrichment import (
+from api.routes.sync_enrichment import (
     _get_league,
     _get_team,
 )
@@ -342,17 +342,6 @@ def _find_chrome_binary() -> Optional[str]:
         except Exception:
             pass
 
-    # 5: Manually search the Nix store for Railway Nixpacks deployments
-    try:
-        nix_store = pathlib.Path("/nix/store")
-        if nix_store.exists():
-            for p in nix_store.glob("*-chromium-*/bin/chromium"):
-                if p.exists() and p.is_file():
-                    logger.info("Chrome binary found via Nix store glob: %s", str(p))
-                    return str(p)
-    except Exception as e:
-        logger.warning("Error searching Nix store: %s", e)
-
     return None
 
 
@@ -554,7 +543,7 @@ def _insert_clubelo_rows(cur, rows: list[dict]) -> int:
     divisions, causing Premier League / Championship / League One /
     League Two to be mixed).
     """
-    from routes.sync_enrichment import _normalize_team_name, _strip_affixes
+    from api.routes.sync_enrichment import _normalize_team_name, _strip_affixes
     count = 0
     for row in rows:
         raw = row.get("raw", row)

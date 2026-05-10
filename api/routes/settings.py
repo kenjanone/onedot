@@ -1,4 +1,4 @@
-"""
+﻿"""
 Admin Settings API
 ==================
 Endpoints:
@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from database import get_connection
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 
 log    = logging.getLogger(__name__)
 router = APIRouter()

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import shutil as _shutil
 import subprocess as _sp
 import logging as _logging
@@ -9,10 +9,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 
 
-from routes import leagues, teams, matches, standings, squad_stats, player_stats, sync, sync_enrichment, health, auth, cleanup, predictions, venue_stats, prediction_log, markets, performance, feedback, settings, prediction_ask
+from api.routes import leagues, teams, matches, standings, squad_stats, player_stats, sync, sync_enrichment, health, auth, cleanup, predictions, venue_stats, prediction_log, markets, performance, feedback, settings, prediction_ask
 
 try:
-    from routes import soccerdata_sync
+    from api.routes import soccerdata_sync
     _soccerdata_available = True
 except ImportError:
     _soccerdata_available = False

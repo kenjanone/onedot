@@ -27,7 +27,7 @@ class FeedbackIn(BaseModel):
 
 class ReplyIn(BaseModel):
     reply_text: str
-    admin_email: Optional[str] = None
+    admin_email: Optional[str] = None   # passed from frontend token
 
 
 # ── POST /api/feedback ─────────────────────────────────────────────────────────
@@ -148,6 +148,7 @@ def reply_to_feedback(feedback_id: int, body: ReplyIn):
     conn = get_connection()
     cur = conn.cursor()
     try:
+        # Ensure reply columns exist (safe ALTER — no-op if already present)
         for col, coldef in [
             ("reply_text",  "TEXT"),
             ("replied_at",  "TIMESTAMPTZ"),

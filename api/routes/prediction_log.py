@@ -1,4 +1,4 @@
-"""
+﻿"""
 Prediction Log — Standalone Performance Tracker
 ================================================
 Tracks every prediction made by the ML engine against the actual result
@@ -69,7 +69,7 @@ from pydantic import BaseModel
 from typing import Optional
 import logging
 from database import get_connection
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 
 log = logging.getLogger(__name__)
 router = APIRouter()

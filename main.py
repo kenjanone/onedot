@@ -6,10 +6,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 
 
-from routes import leagues, teams, matches, standings, squad_stats, player_stats, sync, sync_enrichment, health, auth, cleanup, predictions, venue_stats, prediction_log, markets, performance, feedback, settings, prediction_ask, system
+from api.routes import leagues, teams, matches, standings, squad_stats, player_stats, sync, sync_enrichment, health, auth, cleanup, predictions, venue_stats, prediction_log, markets, performance, feedback, settings, prediction_ask, system
 
 try:
-    from routes import soccerdata_sync
+    from api.routes import soccerdata_sync
     _soccerdata_available = True
 except ImportError:
     _soccerdata_available = False
@@ -133,10 +133,9 @@ app.include_router(system.router, prefix="/api/system", tags=["System"])
 
 @app.on_event("startup")
 async def _startup():
-    """Start the background job queue and pre-warm the prediction cache."""
-    from ml.job_queue import get_queue, JobType
-    q = get_queue()          # starts daemon worker thread
-    q.enqueue(JobType.WARM_CACHE)   # pre-warm on boot so first /upcoming is instant
+    """Start the background job queue. Cache warms lazily on first request."""
+    from ml.job_queue import get_queue
+    get_queue()   # starts daemon worker thread only — no heavy computation at boot
 
 # ─── Chrome/Chromium startup diagnostic ───────────────────────────────────────
 # Logs exactly where (or whether) Chrome is found at boot time so we can

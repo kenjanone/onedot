@@ -14,7 +14,7 @@ def get_squad_stats(
     conn = get_connection()
     cur = conn.cursor()
     query = """
-        SELECT ts.*, t.name AS team, t.logo_url, l.name AS league, s.name AS season
+        SELECT ts.*, t.name AS team, t.logo_url AS logo_url, l.name AS league, s.name AS season
         FROM team_squad_stats ts
         JOIN teams t ON t.id = ts.team_id
         JOIN leagues l ON l.id = ts.league_id

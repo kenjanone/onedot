@@ -1,8 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends
+﻿from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from database import get_connection
-from routes.deps import require_admin
+from api.routes.deps import require_admin
 import json
 import logging
 from datetime import datetime
