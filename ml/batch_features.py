@@ -234,7 +234,7 @@ class DataCache:
                    m.home_score, m.away_score, m.match_date
             FROM matches m
             WHERE m.home_score IS NOT NULL AND m.away_score IS NOT NULL
-              AND m.match_date >= CURRENT_DATE - INTERVAL '4 years'
+              AND m.match_date >= CURRENT_DATE - INTERVAL '2 years'
               AND (
                   EXISTS (
                       SELECT 1 FROM league_standings ls
@@ -273,18 +273,15 @@ class DataCache:
 
         # H2H index — O(1) lookup by team pair instead of O(n) linear scan.
         # Key: canonical (min_id, max_id) tuple so order is irrelevant.
-        #
-        # Without this index, _compute_h2h() would scan all_matches (38k+
-        # rows) for EVERY fixture. With 30 upcoming fixtures that is
-        # 30 × O(38k) = ~1.1M comparisons per /upcoming request.
-        # With this index: 30 × O(1) dict lookup + O(k) where k ≤ 20 H2H rows.
-        #
         # Space: O(n) references — Python lists share the same dict objects
         # already in self.all_matches; no copies are made.
+        # Cap each pair at 20 matches (more than enough for H2H stats).
         self.h2h_index: Dict[Tuple, List] = defaultdict(list)
         for m in self.all_matches:
             h, a = m["home_team_id"], m["away_team_id"]
-            self.h2h_index[(min(h, a), max(h, a))].append(m)
+            key = (min(h, a), max(h, a))
+            if len(self.h2h_index[key]) < 20:   # cap per-pair to bound memory
+                self.h2h_index[key].append(m)
 
         # 5. Seasons ──────────────────────────────────────────────────────────
         cur.execute("SELECT id, name FROM seasons")

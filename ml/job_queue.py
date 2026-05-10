@@ -1,4 +1,4 @@
-"""
+﻿"""
 PlusOne Background Job Queue
 ==============================
 Replaces all bare threading.Thread spawns in routes/sync.py and routes/markets.py
@@ -222,7 +222,7 @@ class JobQueue:
     def _resolve(self, job_type: str) -> Optional[Callable]:
         try:
             if job_type == JobType.EVALUATE_PREDICTIONS:
-                from routes.prediction_log import do_evaluate_predictions
+                from api.routes.prediction_log import do_evaluate_predictions
                 from database import get_connection
                 def _eval():
                     conn = get_connection()
